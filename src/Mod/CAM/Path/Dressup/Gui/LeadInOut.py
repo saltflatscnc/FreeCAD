@@ -930,6 +930,40 @@ class ObjectDressup:
         result = instr.isMove() and not instr.isRapid() and not instr.isPlunge()
         return result
 
+    # Vertical moves that lift over a holding tag and drop back down belong to
+    # the profile, they must not end it with a lead-out and a new lead-in
+    def findTagMoveIndexes(self):
+        source = self.source
+        tagMoves = set()
+        for i, instr in enumerate(source):
+            if i == 0 or not self.isCuttingMove(source[i - 1]):
+                continue
+            if not (instr.isPlunge() and self.getMoveDir(instr) == "Up"):
+                continue
+            z = instr.positionBegin().z
+            excursion = [i]
+            for j in range(i + 1, len(source)):
+                move = source[j]
+                if not move.isMove() or move.isRapid():
+                    break
+                if move.isPlunge():
+                    excursion.append(j)
+                    if self.getMoveDir(move) == "Down" and Path.Geom.isRoughly(
+                        move.positionEnd().z, z
+                    ):
+                        if j + 1 < len(source) and self.isCuttingMove(source[j + 1]):
+                            tagMoves.update(excursion)
+                        break
+        return tagMoves
+
+    # Cutting move or part of the profile (tag), by index in source
+    def isProfileMove(self, i):
+        return self.isCuttingMove(self.source[i]) or i in self.tagMoves
+
+    # Length along the profile, a vertical tag move adds nothing
+    def profileLength(self, instr):
+        return 0 if instr.isPlunge() else instr.pathLength()
+
     # Get direction of non cut movements
     def getMoveDir(self, instr):
         if instr.positionBegin().z > instr.positionEnd().z:
@@ -956,7 +990,7 @@ class ObjectDressup:
         if startIndex >= len(self.source):
             return len(self.source) - 1
         for i in range(startIndex, len(self.source), +1):
-            if not self.isCuttingMove(self.source[i]):
+            if not self.isProfileMove(i):
                 return i - 1
 
         return i
@@ -982,7 +1016,7 @@ class ObjectDressup:
             # get extra commands from end of the closed profile
             measuredLength = 0
             for i, instr in enumerate(reversed(self.source[start : end + 1])):
-                instrLength = instr.pathLength()
+                instrLength = self.profileLength(instr)
 
                 if Path.Geom.isRoughly(measuredLength + instrLength, length):
                     # get needed length without needing to cut last command
@@ -1018,7 +1052,7 @@ class ObjectDressup:
             # get extra commands from begin of the closed profile
             measuredLength = 0
             for i, instr in enumerate(self.source[start : end + 1]):
-                instrLength = instr.pathLength()
+                instrLength = self.profileLength(instr)
 
                 if Path.Geom.isRoughly(measuredLength + instrLength, length):
                     # get needed length without needing to cut last command
@@ -1056,7 +1090,7 @@ class ObjectDressup:
                 cmds.append(newInstr)
                 return cmds
 
-            instrLength = instr.pathLength()
+            instrLength = self.profileLength(instr)
             measuredLength += instrLength
             if Path.Geom.isRoughly(measuredLength, cutLength):
                 # get needed length and not need to cut any command
@@ -1152,6 +1186,7 @@ class ObjectDressup:
         self.firstMillIndex = None  # Index start mill instruction for one profile
         self.lastMillIndex = None  # Index end mill instruction for one profile
         self.lastCuttingMoveIndex = self.findLastCuttingMoveIndex()
+        self.tagMoves = self.findTagMoveIndexes()
         self.closedProfile = True
         inInstrPrev = None  # for RetractThreshold
         outInstrPrev = None  # for RetractThreshold
@@ -1162,7 +1197,7 @@ class ObjectDressup:
         # Process all instructions
         for i, instr in enumerate(source):
             # Process without mill instruction
-            if not self.isCuttingMove(instr):
+            if not self.isProfileMove(i):
                 if not instr.isMove():
                     # non-move instruction gets added verbatim
                     commands.append(instr)
@@ -1181,11 +1216,10 @@ class ObjectDressup:
                 continue
 
             # measuring length for one profile
-            if self.isCuttingMove(instr):
-                measuredLength += instr.pathLength()
+            measuredLength += self.profileLength(instr)
 
             # Process Lead-In
-            if first or not self.isCuttingMove(source[i - 1 - skipCounter]):
+            if first or not self.isProfileMove(i - 1 - skipCounter):
                 if obj.LeadIn or obj.LeadOut:
                     # can not skip leadin if leadout
 
@@ -1232,7 +1266,7 @@ class ObjectDressup:
 
             # Process Lead-Out
             last = bool(i == self.lastCuttingMoveIndex)
-            if last or not self.isCuttingMove(source[i + 1]):
+            if last or not self.isProfileMove(i + 1):
                 if obj.LeadOut:
                     measuredLength = 0  # reset measured length for last profile
 

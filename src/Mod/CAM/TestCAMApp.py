@@ -33,6 +33,7 @@ from CAMTests.TestPathDepthParams import depthTestCases
 from CAMTests.TestPathDressupDogbone import TestDressupDogbone
 from CAMTests.TestPathDressupDogboneII import TestDressupDogboneII
 from CAMTests.TestPathDressupHoldingTags import TestHoldingTags
+from CAMTests.TestPathDressupLeadInOut import TestDressupLeadInOut
 from CAMTests.TestPathDrillable import TestPathDrillable
 from CAMTests.TestPathDrillGenerator import TestPathDrillGenerator
 from CAMTests.TestPathGeneratorDogboneII import TestGeneratorDogboneII
