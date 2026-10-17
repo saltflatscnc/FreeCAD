@@ -27,6 +27,7 @@ import Path.Dressup.Gui.LeadInOut as PathDressupLeadInOut
 import Path.Dressup.Tags as PathDressupTags
 import Path.Main.Job as PathJob
 import Path.Op.Profile as PathProfile
+import PathScripts.PathUtils
 
 from CAMTests.PathTestUtils import PathTestBase
 
@@ -138,3 +139,12 @@ class TestDressupLeadInOut(PathTestBase):
 
         self.assertGreater(len(self.rapids(plain)), 4)
         self.assertEqual(len(self.rapids(tagged)), len(self.rapids(plain)))
+
+    def test04(self):
+        """Verify a dressup made from a script takes its base out of the job, so it posts once."""
+        profile = self.makeProfile()
+        tags = self.makeTags(profile)
+        job = PathScripts.PathUtils.findParentJob(profile)
+
+        self.assertNotIn(profile, job.Operations.Group)
+        self.assertIn(tags, job.Operations.Group)

@@ -315,7 +315,7 @@ def Create(base, name="DressupDogbone"):
     """
     obj = DogboneII.Create(base, name)
     job = PathUtils.findParentJob(base)
-    job.Proxy.addOperation(obj, base)
+    job.Proxy.addOperation(obj, base, True)
 
     if FreeCAD.GuiUp:
         obj.ViewObject.Proxy = ViewProviderDressup(obj.ViewObject)

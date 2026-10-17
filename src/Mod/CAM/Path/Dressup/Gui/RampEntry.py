@@ -807,7 +807,7 @@ class CommandPathDressupRampEntry:
         FreeCADGui.doCommand("base = FreeCAD.ActiveDocument." + selection[0].Name)
         FreeCADGui.doCommand("job = PathScripts.PathUtils.findParentJob(base)")
         FreeCADGui.doCommand("obj.Base = base")
-        FreeCADGui.doCommand("job.Proxy.addOperation(obj, base)")
+        FreeCADGui.doCommand("job.Proxy.addOperation(obj, base, True)")
         FreeCADGui.doCommand(
             "obj.ViewObject.Proxy = Path.Dressup.Gui.RampEntry.ViewProviderDressup(obj.ViewObject)"
         )

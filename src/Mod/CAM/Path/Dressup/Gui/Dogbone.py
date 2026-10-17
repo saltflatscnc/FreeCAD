@@ -1306,7 +1306,7 @@ def Create(base, name="DogboneDressup"):
     obj = FreeCAD.ActiveDocument.addObject("Path::FeaturePython", name)
     dbo = ObjectDressup(obj, base)
     job = PathUtils.findParentJob(base)
-    job.Proxy.addOperation(obj, base)
+    job.Proxy.addOperation(obj, base, True)
 
     if FreeCAD.GuiUp:
         obj.ViewObject.Proxy = ViewProviderDressup(obj.ViewObject)

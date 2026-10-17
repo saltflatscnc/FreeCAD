@@ -300,7 +300,7 @@ class CommandPathDressup:
         FreeCADGui.doCommand("job = PathScripts.PathUtils.findParentJob(base)")
         FreeCADGui.doCommand("obj.Base = base")
         FreeCADGui.doCommand("obj.Radius = 45")
-        FreeCADGui.doCommand("job.Proxy.addOperation(obj, base)")
+        FreeCADGui.doCommand("job.Proxy.addOperation(obj, base, True)")
         FreeCADGui.doCommand(
             "obj.ViewObject.Proxy = Path.Dressup.Gui.AxisMap.ViewProviderDressup(obj.ViewObject)"
         )
