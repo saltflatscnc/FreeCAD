@@ -288,8 +288,52 @@ class ObjectDressup:
             self.direction = self.baseOp.Direction
         else:
             self.direction = "CCW"
+        self.opDirection = self.direction
+        self.wasteSide = self.getWasteSideCheck()
 
         obj.Path = self.generateLeadInOutCurve(obj)
+
+    def getWasteSideCheck(self):
+        """A Profile with a finishing pass runs its passes in two directions, so its Direction
+        does not tell on which side of each loop the waste is. Returns (solids, distance) to find
+        it from the model instead, or None when the op's Direction holds for every loop."""
+        op = self.baseOp
+        if not getattr(op, "FinishPass", False) or op.FinishDirection == op.Direction:
+            return None
+        if op.Base:
+            bases = [base for base, subs in op.Base]
+        else:
+            job = PathUtils.findParentJob(op)
+            bases = job.Model.Group if job else []
+        solids = [solid for base in bases for solid in base.Shape.Solids]
+        if not solids:
+            return None
+        radius = self.toolController.Tool.Diameter.Value / 2
+        distance = radius + op.FinishAllowance.Value + abs(op.OffsetExtra.Value) + 0.5
+        return solids, distance
+
+    def getLoopDirection(self, move):
+        """The direction that puts the leads of the loop starting with move on its waste side
+        (see getLeadDir), or the op's Direction if the model does not tell."""
+        solids, distance = self.wasteSide
+        begin = move.positionBegin()
+        left = self.angleToVector(move.anglesOfTangents()[0] + math.pi / 2) * distance
+
+        def inMaterial(point):
+            for solid in solids:
+                bb = solid.BoundBox
+                point = App.Vector(point.x, point.y, (bb.ZMin + bb.ZMax) / 2)
+                if solid.isInside(point, 1e-6, True):
+                    return True
+            return False
+
+        materialLeft = inMaterial(begin + left)
+        if materialLeft == inMaterial(begin - left):
+            return self.opDirection
+        # getLeadDir puts the lead on the left for Outside + CW and Inside + CCW
+        if materialLeft:
+            return "CCW" if self.side == "Outside" else "CW"
+        return "CW" if self.side == "Outside" else "CCW"
 
     def onDocumentRestored(self, obj):
         """onDocumentRestored(obj) ... Called automatically when document is restored."""
@@ -1230,6 +1274,8 @@ class ObjectDressup:
                         else self.lastMillIndex
                     )
                     self.closedProfile = self.isProfileClosed()
+                    if self.wasteSide:
+                        self.direction = self.getLoopDirection(instr)
 
                     overtravelIn = None
                     if obj.OffsetIn.Value < 0 and obj.StyleIn != "No Retract":

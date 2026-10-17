@@ -191,6 +191,51 @@ class ObjectProfile(PathAreaOp.ObjectOp):
                     "If doing multiple passes, the extra offset of each additional pass",
                 ),
             ),
+            (
+                "App::PropertyBool",
+                "FinishPass",
+                "Finish Pass",
+                QT_TRANSLATE_NOOP(
+                    "App::Property",
+                    "Rough the profile Finish Allowance away from the wall, then cut a separate finishing pass on the wall",
+                ),
+            ),
+            (
+                "App::PropertyDistance",
+                "FinishAllowance",
+                "Finish Pass",
+                QT_TRANSLATE_NOOP(
+                    "App::Property",
+                    "Material the roughing passes leave on the wall for the finishing pass",
+                ),
+            ),
+            (
+                "App::PropertyDistance",
+                "RoughFinalDepth",
+                "Finish Pass",
+                QT_TRANSLATE_NOOP(
+                    "App::Property",
+                    "Depth the roughing passes stop at; the finishing pass always goes down to Final Depth",
+                ),
+            ),
+            (
+                "App::PropertyLength",
+                "FinishStepDown",
+                "Finish Pass",
+                QT_TRANSLATE_NOOP(
+                    "App::Property",
+                    "Step down of the finishing pass, 0 cuts it in one pass from Start Depth to Final Depth",
+                ),
+            ),
+            (
+                "App::PropertyEnumeration",
+                "FinishDirection",
+                "Finish Pass",
+                QT_TRANSLATE_NOOP(
+                    "App::Property",
+                    "The direction of the finishing pass, e.g. the opposite of Direction to rough conventional and finish climb",
+                ),
+            ),
         ]
 
     @classmethod
@@ -210,6 +255,10 @@ class ObjectProfile(PathAreaOp.ObjectOp):
                 (translate("PathProfile", "CW"), "CW"),
                 (translate("PathProfile", "CCW"), "CCW"),
             ],  # this is the direction that the profile runs
+            "FinishDirection": [
+                (translate("PathProfile", "CW"), "CW"),
+                (translate("PathProfile", "CCW"), "CCW"),
+            ],  # this is the direction that the finishing pass runs
             "HandleMultipleFeatures": [
                 (translate("PathProfile", "Collectively"), "Collectively"),
                 (translate("PathProfile", "Individually"), "Individually"),
@@ -256,6 +305,10 @@ class ObjectProfile(PathAreaOp.ObjectOp):
             "processPerimeter": True,
             "Stepover": 0,
             "NumPasses": 1,
+            "FinishPass": False,
+            "FinishAllowance": 0.25,
+            "FinishStepDown": 0.0,
+            "FinishDirection": "CW",
         }
 
     def areaOpApplyPropertyDefaults(self, obj, job, propList):
@@ -279,6 +332,10 @@ class ObjectProfile(PathAreaOp.ObjectOp):
     def areaOpSetDefaultValues(self, obj, job):
         if self.addNewProps and self.addNewProps.__len__() > 0:
             self.areaOpApplyPropertyDefaults(obj, job, self.addNewProps)
+            if "FinishAllowance" in self.addNewProps:
+                obj.FinishAllowance = 0.25
+            if "RoughFinalDepth" in self.addNewProps:
+                obj.setExpression("RoughFinalDepth", "FinalDepth")
 
     def setOpEditorProperties(self, obj):
         """setOpEditorProperties(obj, porp) ... Process operation-specific changes to properties visibility."""
@@ -296,6 +353,9 @@ class ObjectProfile(PathAreaOp.ObjectOp):
 
         obj.setEditorMode("JoinType", 2)
         obj.setEditorMode("MiterLimit", 2)  # ml
+        finish = 0 if obj.FinishPass else 2
+        for prop in ("FinishAllowance", "RoughFinalDepth", "FinishStepDown", "FinishDirection"):
+            obj.setEditorMode(prop, finish)
         obj.setEditorMode("Side", side)
         obj.setEditorMode("HandleMultipleFeatures", fc)
         obj.setEditorMode("processCircles", fc)
@@ -339,7 +399,7 @@ class ObjectProfile(PathAreaOp.ObjectOp):
 
     def areaOpOnChanged(self, obj, prop):
         """areaOpOnChanged(obj, prop) ... updates certain property visibilities depending on changed properties."""
-        if prop in ["UseComp", "JoinType", "Base"]:
+        if prop in ["UseComp", "JoinType", "Base", "FinishPass"]:
             if hasattr(self, "propertiesReady") and self.propertiesReady:
                 self.setOpEditorProperties(obj)
 
@@ -351,8 +411,8 @@ class ObjectProfile(PathAreaOp.ObjectOp):
         params["Coplanar"] = 0
         params["SectionCount"] = -1
 
-        offset = obj.OffsetExtra.Value  # 0.0
-        num_passes = max(1, obj.NumPasses)
+        offset = obj.OffsetExtra.Value + self._roughAllowance(obj)  # 0.0
+        num_passes = 1 if self._isFinishing() else max(1, obj.NumPasses)
         stepover = obj.Stepover.Value
         if num_passes > 1 and stepover == 0:
             # This check is important because C++ code has a default value for stepover if it's 0 and extra passes are requested
@@ -362,7 +422,7 @@ class ObjectProfile(PathAreaOp.ObjectOp):
             )
 
         if obj.UseComp:
-            offset = self.radius + obj.OffsetExtra.Value
+            offset = self.radius + obj.OffsetExtra.Value + self._roughAllowance(obj)
         if obj.Side == "Inside":
             offset = 0 - offset
             stepover = -stepover
@@ -395,27 +455,26 @@ class ObjectProfile(PathAreaOp.ObjectOp):
         Do not overwrite."""
         params = {}
 
+        direction = obj.FinishDirection if self._isFinishing() else obj.Direction
         # Reverse the direction for holes
         if isHole:
-            direction = "CW" if obj.Direction == "CCW" else "CCW"
-        else:
-            direction = obj.Direction
+            direction = "CW" if direction == "CCW" else "CCW"
 
         if direction == "CCW":
             params["orientation"] = 0
         else:
             params["orientation"] = 1
 
-        offset = obj.OffsetExtra.Value
+        offset = obj.OffsetExtra.Value + self._roughAllowance(obj)
         if obj.UseComp:
-            offset = self.radius + obj.OffsetExtra.Value
+            offset = self.radius + obj.OffsetExtra.Value + self._roughAllowance(obj)
         if offset == 0.0:
             if direction == "CCW":
                 params["orientation"] = 1
             else:
                 params["orientation"] = 0
 
-        if obj.NumPasses > 1:
+        if obj.NumPasses > 1 and not self._isFinishing():
             # Disable path sorting to ensure that offsets appear in order, from farthest offset to closest, on all layers
             params["sort_mode"] = 0
 
@@ -424,6 +483,56 @@ class ObjectProfile(PathAreaOp.ObjectOp):
     def areaOpUseProjection(self, obj):
         """areaOpUseProjection(obj) ... returns True"""
         return True
+
+    def _isFinishing(self):
+        return getattr(self, "finishing", False)
+
+    def _roughAllowance(self, obj):
+        """Extra offset of the roughing passes when the op has a finishing pass."""
+        if getattr(obj, "FinishPass", False) and not self._isFinishing():
+            return obj.FinishAllowance.Value
+        return 0.0
+
+    def _buildPathArea(self, obj, baseobject, isHole, start, getsim):
+        """With FinishPass: the roughing passes (Direction, StepDown, Finish Allowance off the
+        wall, down to Rough Final Depth), then the finishing pass on the wall (Finish Direction,
+        Finish Step Down, down to Final Depth), for each shape in turn."""
+        if not getattr(obj, "FinishPass", False):
+            return super()._buildPathArea(obj, baseobject, isHole, start, getsim)
+
+        depthparams = self.depthparams
+        startDepth = obj.StartDepth.Value
+        finalDepth = obj.FinalDepth.Value
+        roughDepth = max(obj.RoughFinalDepth.Value, finalDepth)
+        commands = []
+        sim = None
+        try:
+            if roughDepth < startDepth:
+                self.finishing = False
+                self.depthparams = self._customDepthParams(obj, startDepth, roughDepth)
+                pp, sim = super()._buildPathArea(obj, baseobject, isHole, start, getsim)
+                commands.extend(pp.Commands)
+
+            self.finishing = True
+            stepDown = obj.FinishStepDown.Value
+            if stepDown <= 0:
+                stepDown = startDepth - finalDepth
+            self.depthparams = PathUtils.depth_params(
+                clearance_height=obj.ClearanceHeight.Value,
+                safe_height=obj.SafeHeight.Value,
+                start_depth=startDepth,
+                step_down=stepDown,
+                z_finish_step=0.0,
+                final_depth=finalDepth,
+                user_depths=None,
+            )
+            pp, finishSim = super()._buildPathArea(obj, baseobject, isHole, start, getsim)
+            commands.extend(pp.Commands)
+        finally:
+            self.finishing = False
+            self.depthparams = depthparams
+
+        return Path.Path(commands), finishSim if sim is None else sim
 
     def opUpdateDepths(self, obj):
         if hasattr(obj, "Base") and obj.Base.__len__() == 0:

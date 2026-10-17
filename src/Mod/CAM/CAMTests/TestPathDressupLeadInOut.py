@@ -23,6 +23,7 @@
 
 import FreeCAD
 import Path
+import math
 import Path.Dressup.Gui.LeadInOut as PathDressupLeadInOut
 import Path.Dressup.Tags as PathDressupTags
 import Path.Main.Job as PathJob
@@ -61,6 +62,45 @@ class TestDressupLeadInOut(PathTestBase):
         profile.StepDown = stepDown
         self.doc.recompute()
         return profile
+
+    def makeFinishProfile(self):
+        """Rough conventional 14 deep 0.25 off the wall, finish climb to full depth."""
+        profile = self.makeProfile(stepDown=14)
+        profile.Direction = "CCW"
+        profile.FinishPass = True
+        profile.FinishAllowance = 0.25
+        profile.FinishDirection = "CW"
+        profile.setExpression("RoughFinalDepth", None)
+        profile.RoughFinalDepth = 4
+        self.doc.recompute()
+        return profile
+
+    def loops(self, obj):
+        """[(z, signed area, xy bound box)] of the closed cutting loops of a path."""
+        loops, pts, pos = [], [], FreeCAD.Vector()
+        for cmd in obj.Path.Commands + [Path.Command("G0")]:
+            if cmd.Name in Path.Geom.CmdMove:
+                end = FreeCAD.Vector(
+                    cmd.Parameters.get("X", pos.x),
+                    cmd.Parameters.get("Y", pos.y),
+                    cmd.Parameters.get("Z", pos.z),
+                )
+            if cmd.Name in Path.Geom.CmdMoveArc + Path.Geom.CmdMoveStraight and Path.Geom.isRoughly(
+                end.z, pos.z
+            ):
+                pts += [pos, end] if not pts else [end]
+            elif len(pts) > 2:
+                area = sum(a.x * b.y - b.x * a.y for a, b in zip(pts, pts[1:] + pts[:1])) / 2
+                bb = FreeCAD.BoundBox()
+                for p in pts:
+                    bb.add(p)
+                loops.append((round(pts[0].z, 3), area, bb))
+                pts = []
+            else:
+                pts = []
+            if cmd.Name in Path.Geom.CmdMove:
+                pos = end
+        return loops
 
     def makeTags(self, base, positions=None):
         tags = PathDressupTags.Create(base)
@@ -148,3 +188,40 @@ class TestDressupLeadInOut(PathTestBase):
 
         self.assertNotIn(profile, job.Operations.Group)
         self.assertIn(tags, job.Operations.Group)
+
+    def test05(self):
+        """Verify a Profile finish pass roughs off the wall, then finishes on it the other way."""
+        profile = self.makeFinishProfile()
+        loops = self.loops(profile)
+        r = profile.ToolController.Tool.Diameter.Value / 2
+
+        self.assertEqual([z for z, a, bb in loops], [4, -0.25])
+        rough, finish = loops
+        self.assertRoughly(rough[2].XMax, 200 + r + 0.25)
+        self.assertRoughly(finish[2].XMax, 200 + r)
+        self.assertGreater(rough[1], 0)  # CCW
+        self.assertLess(finish[1], 0)  # CW
+
+    def test06(self):
+        """Verify the leads of a finish pass Profile go into the waste on both passes."""
+        profile = self.makeFinishProfile()
+        dressup = self.makeLeadInOut(self.makeTags(profile), offsetOut=5)
+        r = profile.ToolController.Tool.Diameter.Value / 2
+
+        plunges = [c for c in dressup.Path.Commands if c.Name == "G1" and "X" not in c.Parameters]
+        self.assertEqual([round(c.z, 2) for c in plunges], [4, -0.25])
+        for cmd in dressup.Path.Commands:
+            if cmd.Name in Path.Geom.CmdMove and "X" in cmd.Parameters:
+                dx = max(-cmd.x, 0, cmd.x - 200)
+                dy = max(-cmd.y, 0, cmd.y - 100)
+                self.assertGreater(math.hypot(dx, dy), r - 0.001, "%s goes into the part" % cmd)
+
+    def test07(self):
+        """Verify tags only hold the finishing pass of a finish pass Profile."""
+        profile = self.makeFinishProfile()
+        tags = self.makeTags(profile)
+        tagged = self.makeLeadInOut(tags)
+
+        self.assertTrue(self.overTags(tagged))
+        roughZ = [cmd.z for cmd in tags.Path.Commands if "Z" in cmd.Parameters and cmd.z > 3.5]
+        self.assertEqual(set(round(z, 3) for z in roughZ) - {4.0}, set(round(z, 3) for z in roughZ if z > 4.0))
